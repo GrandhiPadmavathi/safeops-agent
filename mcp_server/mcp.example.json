@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "safeops-banking": {
+      "command": "/path/to/safeops-agent/.venv/bin/python",
+      "args": ["-m", "mcp_server.server", "--domain", "banking"],
+      "cwd": "/path/to/safeops-agent"
+    },
+    "safeops-ecommerce": {
+      "command": "/path/to/safeops-agent/.venv/bin/python",
+      "args": ["-m", "mcp_server.server", "--domain", "ecommerce"],
+      "cwd": "/path/to/safeops-agent"
+    }
+  }
+}
