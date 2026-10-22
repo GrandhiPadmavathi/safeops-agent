@@ -110,6 +110,15 @@ uvicorn api.main:app --port 8080                       # API docs at http://127.
 cd ui && npm install && npm run dev                    # UI at http://localhost:5173
 ```
 
+The UI has two views in the left rail:
+
+- **Agent chat**: the conversation with each tool call shown as a lookup, risky call, result, rejection or policy
+  block, an approval card with a plain-language summary, and a session-insights column (tool calls, risky calls,
+  executed actions, policy blocks, a safety-decisions donut and per-tool usage bars).
+- **Live records**: KPI cards and charts per domain (orders by status, order value vs refunded share against the
+  refund limit, refunds issued; balances per account, card and transaction status, transactions against the
+  reversal limit), the data tables with rows the agent just changed highlighted, and the audit log.
+
 On Windows `scripts/run_all.ps1` starts both. `python scripts/smoke_test.py` runs a real block-card request
 through the API and checks the card only changes after approval.
 
