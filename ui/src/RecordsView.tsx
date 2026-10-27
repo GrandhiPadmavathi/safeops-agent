@@ -212,6 +212,8 @@ export default function RecordsView({ domain, title, records, audit, onReset, bu
             <li key={i} className={a.event}>
               <span>{a.ts.slice(11, 19)}</span> <b>{a.event.replace("_", " ")}</b> {a.tool}
               {a.decision ? ` · ${a.decision}` : ""}
+              {a.event === "approval_requested" && a.requested_by ? ` · by ${a.requested_by}` : ""}
+              {a.event === "approval_decision" && a.reviewer ? ` by ${a.reviewer}` : ""}
               {a.summary ? <em> — {a.summary}</em> : null}
             </li>
           ))}

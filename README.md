@@ -24,12 +24,14 @@ do, not just what it says.
 
 ## Demo
 
-![SafeOps Agent demo: approval gate, rejection, prompt-injection refusal and policy block](docs/demo.gif)
+![SafeOps Agent demo: operator and reviewer sign in, two-person approval, rejection, prompt-injection refusal and policy block](docs/demo.gif)
 
-Recorded against the local stack (`qwen2.5:3b` on Ollama); model thinking time is sped up. It walks through a
-read-only balance lookup, a transaction reversal that pauses for approval and then executes, a card block the
-reviewer rejects, a "SYSTEM OVERRIDE" prompt-injection attempt that is refused, and an order cancellation that the
-dry-run policy check blocks before any human is asked.
+Recorded against the local stack (`qwen2.5:3b` on Ollama); model thinking time is sped up. Two people are signed in
+side by side: an `operator` who chats with the agent and a `reviewer` who decides. It walks through a read-only
+balance lookup, a transaction reversal that waits in the reviewer's queue and executes once they approve, a card
+block the reviewer rejects, a "SYSTEM OVERRIDE" prompt-injection attempt that is refused, an order cancellation that
+the dry-run policy check blocks before any human is asked, and the audit log recording who requested and who
+decided each action.
 
 ## Architecture
 
