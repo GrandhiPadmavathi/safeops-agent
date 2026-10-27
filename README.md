@@ -19,6 +19,15 @@ do, not just what it says.
 - **MCP server**: the same tools can be served to Claude Desktop / Cursor; risky ones only return a preview until
   called again with `confirm=true`.
 
+## Demo
+
+![SafeOps Agent demo: approval gate, rejection, prompt-injection refusal and policy block](docs/demo.gif)
+
+Recorded against the local stack (`qwen2.5:3b` on Ollama); model thinking time is sped up. It walks through a
+read-only balance lookup, a transaction reversal that pauses for approval and then executes, a card block the
+reviewer rejects, a "SYSTEM OVERRIDE" prompt-injection attempt that is refused, and an order cancellation that the
+dry-run policy check blocks before any human is asked.
+
 ## Architecture
 
 ```mermaid
