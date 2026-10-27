@@ -164,7 +164,7 @@ function Table({ name, rows, changed }: { name: string; rows: Row[]; changed: Se
 }
 
 export default function RecordsView({ domain, title, records, audit, onReset, busy }: {
-  domain: string; title: string; records: Records; audit: AuditEntry[]; onReset: () => void; busy: boolean;
+  domain: string; title: string; records: Records; audit: AuditEntry[]; onReset?: () => void; busy: boolean;
 }) {
   const previous = useRef<{ domain: string; rows: Map<string, string> } | null>(null);
   const [changed, setChanged] = useState<Set<string>>(new Set());
@@ -193,7 +193,7 @@ export default function RecordsView({ domain, title, records, audit, onReset, bu
           <h2>Live records</h2>
           <p className="hint">{title}. Rows the agent just changed are highlighted.</p>
         </div>
-        <button className="ghost" onClick={onReset} disabled={busy}>Reset demo data</button>
+        {onReset && <button className="ghost" onClick={onReset} disabled={busy}>Reset demo data</button>}
       </div>
 
       {domain === "banking" ? <BankingCharts records={records} /> : <EcommerceCharts records={records} />}

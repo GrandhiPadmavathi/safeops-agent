@@ -8,6 +8,7 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage
 
 from safeops.audit import AuditLog
+from safeops.auth import AuthService, TokenService, UserStore
 from safeops.bootstrap import seed_all
 from safeops.db import Database
 from safeops.runner import AgentRunner
@@ -35,6 +36,25 @@ def say(text: str) -> AIMessage:
 
 def result_of(domain, db: Database, tool: str, **args) -> dict:
     return json.loads(domain.run_tool(db.session_factory, tool, args))
+
+
+TEST_SECRET = "test-secret-that-is-long-enough-for-hs256"
+TEST_USERS = {
+    "olivia": ("operator",), "omar": ("operator",), "ravi": ("reviewer",), "admin": ("admin",),
+}
+
+
+def make_auth(**token_kwargs) -> AuthService:
+    users = UserStore()
+    for name, roles in TEST_USERS.items():
+        users.add(name, f"pw-{name}", roles)
+    return AuthService(users, TokenService(secret=TEST_SECRET, **token_kwargs))
+
+
+def login(client, username: str) -> dict[str, str]:
+    res = client.post("/auth/token", data={"username": username, "password": f"pw-{username}"})
+    assert res.status_code == 200, res.text
+    return {"Authorization": f"Bearer {res.json()['access_token']}"}
 
 
 @pytest.fixture

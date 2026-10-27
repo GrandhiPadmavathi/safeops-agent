@@ -43,6 +43,9 @@ class AgentRunner:
         self.checkpointer = MemorySaver()
         self._graphs: dict[str, Any] = {}
         self._thread_domain: dict[str, str] = {}
+        self._thread_owner: dict[str, str] = {}
+        self._requested_at: dict[str, str] = {}
+        self._last_result: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
 
     def _graph(self, domain_name: str):
@@ -59,15 +62,25 @@ class AgentRunner:
     def _config(thread_id: str) -> dict[str, Any]:
         return {"configurable": {"thread_id": thread_id}}
 
-    def chat(self, domain_name: str, message: str, thread_id: str | None = None) -> dict[str, Any]:
+    def owner(self, thread_id: str) -> str | None:
+        return self._thread_owner.get(thread_id)
+
+    def chat(
+        self, domain_name: str, message: str, thread_id: str | None = None, user: str | None = None
+    ) -> dict[str, Any]:
         get_domain(domain_name)
         thread_id = thread_id or str(uuid.uuid4())
         known = self._thread_domain.get(thread_id)
         if known and known != domain_name:
             raise ValueError(f"Thread {thread_id} belongs to domain '{known}'.")
+        owner = self._thread_owner.get(thread_id)
+        if known and owner != user:
+            raise PermissionError("This conversation belongs to another user.")
         if self.pending_approval(thread_id):
             raise ValueError("This conversation is waiting for an approval decision first.")
         self._thread_domain[thread_id] = domain_name
+        if user is not None:
+            self._thread_owner[thread_id] = user
         state = {"messages": [HumanMessage(content=message)], "step_count": 0, "approved_tool_call_ids": []}
         return self._run(domain_name, thread_id, state)
 
@@ -76,12 +89,35 @@ class AgentRunner:
         pending = self.pending_approval(thread_id) if domain_name else None
         if not pending:
             raise ValueError("There is no action waiting for approval in this conversation.")
+        requested_by = self._thread_owner.get(thread_id)
+        if requested_by is not None and requested_by == reviewer:
+            self.audit.record("approval_denied", thread_id=thread_id, domain=domain_name, tool=pending["tool_name"],
+                              reviewer=reviewer, reason="separation of duties: requester cannot approve")
+            raise PermissionError("You cannot approve an action you requested; another reviewer must decide.")
+        decision = "approved" if approved else "rejected"
         self.audit.record(
             "approval_decision", thread_id=thread_id, domain=domain_name, tool=pending["tool_name"],
-            arguments=pending["arguments"], summary=pending["summary"],
-            decision="approved" if approved else "rejected", reviewer=reviewer, note=note,
+            arguments=pending["arguments"], summary=pending["summary"], requested_by=requested_by,
+            decision=decision, reviewer=reviewer, note=note,
         )
-        return self._run(domain_name, thread_id, Command(resume={"approved": approved}))
+        self._requested_at.pop(thread_id, None)
+        result = self._run(domain_name, thread_id, Command(resume={"approved": approved}))
+        result["decision"] = {"decision": decision, "reviewer": reviewer, "note": note, "summary": pending["summary"]}
+        self._last_result[thread_id] = result
+        return result
+
+    def pending_approvals(self) -> list[dict[str, Any]]:
+        items = []
+        for thread_id, domain_name in list(self._thread_domain.items()):
+            pending = self.pending_approval(thread_id)
+            if pending:
+                items.append({"thread_id": thread_id, "domain": domain_name,
+                              "requested_by": self._thread_owner.get(thread_id),
+                              "requested_at": self._requested_at.get(thread_id), **pending})
+        return sorted(items, key=lambda item: item["requested_at"] or "")
+
+    def thread_status(self, thread_id: str) -> dict[str, Any] | None:
+        return self._last_result.get(thread_id)
 
     def pending_approval(self, thread_id: str) -> dict[str, Any] | None:
         domain_name = self._thread_domain.get(thread_id)
@@ -121,17 +157,22 @@ class AgentRunner:
 
         pending = self.pending_approval(thread_id)
         if pending:
-            self.audit.record("approval_requested", thread_id=thread_id, domain=domain_name,
-                              tool=pending["tool_name"], arguments=pending["arguments"],
-                              summary=pending["summary"])
+            entry = self.audit.record("approval_requested", thread_id=thread_id, domain=domain_name,
+                                      tool=pending["tool_name"], arguments=pending["arguments"],
+                                      summary=pending["summary"], requested_by=self._thread_owner.get(thread_id))
+            self._requested_at[thread_id] = entry["ts"]
             events.append({"type": "approval_required", **pending})
-            return {"thread_id": thread_id, "domain": domain_name, "status": "awaiting_approval",
-                    "events": events, "reply": "", "approval": pending}
+            result = {"thread_id": thread_id, "domain": domain_name, "status": "awaiting_approval",
+                      "events": events, "reply": "", "approval": pending}
+            self._last_result[thread_id] = result
+            return result
 
         reply = ""
         for msg in reversed(messages[before:]):
             if isinstance(msg, AIMessage) and not msg.tool_calls and msg.content:
                 reply = str(msg.content)
                 break
-        return {"thread_id": thread_id, "domain": domain_name, "status": "completed",
-                "events": events, "reply": reply, "approval": None}
+        result = {"thread_id": thread_id, "domain": domain_name, "status": "completed",
+                  "events": events, "reply": reply, "approval": None}
+        self._last_result[thread_id] = result
+        return result

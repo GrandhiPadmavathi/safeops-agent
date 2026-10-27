@@ -12,6 +12,9 @@ do, not just what it says.
   touching a frozen account), the model gets the error and the reviewer is never interrupted.
 - **Audit log**: every approval request, decision (with reviewer and note), execution and policy block is written to
   an append-only JSONL file and shown in the UI.
+- **Authentication and roles**: JWT sign-in with operator, reviewer and admin roles, two-person approval (nobody can
+  approve an action they requested), per-user conversations, and optional sign-in through Microsoft Entra ID,
+  Google or any OpenID Connect provider. See [Security](#security).
 - **Two domains, one core**: a domain is just tools + Pydantic schemas + a prompt + seed data. Adding a third is a
   folder, not a rewrite.
 - **Ollama or Groq**: `SAFEOPS_LLM_PROVIDER=ollama` (default, `qwen2.5:3b`, fully local) or `groq`
@@ -32,8 +35,9 @@ dry-run policy check blocks before any human is asked.
 
 ```mermaid
 flowchart LR
-    UI[React UI] -->|/chat, /approve| API[FastAPI]
-    API --> R[AgentRunner<br/>threads + audit]
+    UI[React UI] -->|Bearer JWT<br/>/chat, /approvals, /approve| API[FastAPI<br/>roles + permissions]
+    IDP[Entra ID / Google<br/>OIDC, optional] -.->|RS256 token, verified via JWKS| API
+    API --> R[AgentRunner<br/>threads + owners + audit]
     R --> G
     subgraph G[LangGraph]
         A[agent<br/>LLM + tools] -->|tool calls| H{human_approval}
@@ -58,6 +62,41 @@ flowchart LR
 
 `execute_tools` only runs calls that are safe or explicitly approved, so a model that emits two risky calls in one
 turn needs two decisions.
+
+## Security
+
+A human approval gate is only as strong as the identity behind it, so every route except `/health`, `/domains` and
+sign-in needs a bearer token, and every permission is checked on the server.
+
+| Role | Can | Cannot |
+|---|---|---|
+| `operator` | chat with the agent, request risky actions, view records and the audit entries of their own conversations | approve anything, read other users' conversations, reset data |
+| `reviewer` | see the approval queue, approve or reject, view records and the full audit log | chat, reset data |
+| `admin` | everything above, plus reset demo data | approve their own requests |
+
+- **Two-person approval (separation of duties).** The runner records who started each conversation. `/approve`
+  refuses (403, audited as `approval_denied`) when the reviewer is the requester, admins included.
+- **Identity comes from the token, never the request body.** The reviewer recorded on a decision is the signed-in
+  user; a `reviewer` field sent by a client is ignored. Audit entries carry `requested_by` and `reviewer`.
+- **Conversations belong to their owner.** Continuing someone else's thread returns 403; reading it returns 404 so
+  thread IDs cannot be probed.
+- **Sign-in.** `POST /auth/token` (OAuth2 password form) checks scrypt password hashes and returns a 30-minute
+  HS256 JWT with `iss`, `aud`, `exp`, `sub`, `roles` and `jti`. Failures get one generic message for unknown users
+  and wrong passwords, unknown users still pay the hashing cost, and five failures in five minutes lock the
+  username (429). Failed sign-ins and denied requests are written to the audit log; passwords never are.
+- **Single sign-on, optional.** Set `SAFEOPS_OIDC_ISSUER`, `SAFEOPS_OIDC_AUDIENCE` and `SAFEOPS_OIDC_JWKS_URL` and
+  the API also accepts RS256 access tokens from that provider, verified against its published keys, with roles
+  taken from the `roles` claim (Microsoft Entra ID app roles named `operator`, `reviewer`, `admin`). Unknown roles
+  are dropped, tokens for another audience or signed by another key are rejected. The bundled UI uses the local
+  sign-in; a front end that signs users in with MSAL or Google can send its tokens to the same API.
+- **Demo accounts.** `operator`, `reviewer` and `admin`, password `safeops-demo` (set
+  `SAFEOPS_AUTH_DEMO_PASSWORD`, or `SAFEOPS_AUTH_DEMO_USERS=false` to turn them off). Set `SAFEOPS_AUTH_JWT_SECRET`
+  (32+ characters) so tokens survive a restart; without it a random secret is generated per process.
+- **MCP server.** It runs locally over stdio for a single trusted user, so it does not use these tokens; risky tools
+  still need an explicit `confirm=true` call.
+
+Not covered, because this is a demo: tokens are not revocable before they expire, the UI keeps the token in memory
+only (refreshing the page signs you out), and the throttle is per process rather than shared.
 
 ## Domains
 
@@ -119,28 +158,38 @@ uvicorn api.main:app --port 8080                       # API docs at http://127.
 cd ui && npm install && npm run dev                    # UI at http://localhost:5173
 ```
 
-The UI has two views in the left rail:
+Sign in as `operator` in one browser window and `reviewer` in another (a private window works) to see the
+two-person flow. The views in the left rail depend on the role:
 
-- **Agent chat**: the conversation with each tool call shown as a lookup, risky call, result, rejection or policy
-  block, an approval card with a plain-language summary, and a session-insights column (tool calls, risky calls,
-  executed actions, policy blocks, a safety-decisions donut and per-tool usage bars).
+- **Agent chat** (operator, admin): the conversation with each tool call shown as a lookup, risky call, result,
+  rejection or policy block, a "waiting for a reviewer" card that updates when the decision is made, and a
+  session-insights column (tool calls, risky calls, executed actions, policy blocks, a safety-decisions donut and
+  per-tool usage bars).
+- **Approvals** (reviewer, admin): the queue of pending risky actions with who requested them, a note field and
+  Approve / Reject. Your own requests are shown but cannot be decided by you.
 - **Live records**: KPI cards and charts per domain (orders by status, order value vs refunded share against the
   refund limit, refunds issued; balances per account, card and transaction status, transactions against the
   reversal limit), the data tables with rows the agent just changed highlighted, and the audit log.
 
 On Windows `scripts/run_all.ps1` starts both. `python scripts/smoke_test.py` runs a real block-card request
-through the API and checks the card only changes after approval.
+through the API and checks that the card only changes after a reviewer approves, and that an operator cannot.
 
 ### API
 
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/domains` | domains, tools (with `risky` flag), sample prompts |
-| POST | `/chat` | `{domain, message, thread_id?}` → events, reply or pending approval |
-| POST | `/approve` | `{thread_id, approved, reviewer, note}` → resumes the run |
-| GET | `/domains/{name}/records` | live data for the UI |
-| GET | `/audit?limit=50` | recent audit entries |
-| POST | `/reset` | reseed demo data |
+| Method | Path | Permission | Purpose |
+|---|---|---|---|
+| POST | `/auth/token` | – | OAuth2 password form → `{access_token, expires_in, user}` |
+| GET | `/auth/me` | signed in | current user, roles and permissions |
+| GET | `/domains` | – | domains, tools (with `risky` flag), sample prompts |
+| POST | `/chat` | `chat` | `{domain, message, thread_id?}` → events, reply or pending approval |
+| GET | `/approvals` | `approve` | pending risky actions with `requested_by` and `can_decide` |
+| POST | `/approve` | `approve` | `{thread_id, approved, note}` → resumes the run as the signed-in reviewer |
+| GET | `/threads/{id}` | owner or `approve` | latest status of a conversation, including the decision |
+| GET | `/domains/{name}/records` | `records:read` | live data for the UI |
+| GET | `/audit?limit=50` | `audit:read` (operators: own threads) | recent audit entries |
+| POST | `/reset` | `admin:reset` | reseed demo data |
+
+The Swagger page at `/docs` has an **Authorize** button that signs in with the same form.
 
 ### MCP
 
@@ -154,12 +203,17 @@ as destructive and return `{"requires_confirmation": true, "summary": ...}` unti
 ## Tests
 
 ```bash
-pytest     # 40 tests, no model needed
+pytest     # 50 tests, no model needed
 ```
 
 The graph is tested with a scripted fake chat model: approve and reject paths for both domains, two risky calls
 in one turn, the policy check blocking without touching data, the step limit, thread/domain guards, every
 business rule, the API round trip, the MCP confirm flow and the eval scoring.
+
+`tests/test_auth.py` attacks the API: every protected route without a token, wrong passwords and lockout, each role
+trying what it must not, self-approval, a spoofed `reviewer` field, one operator hijacking another's conversation,
+tokens that are re-signed with escalated roles, expired, from an untrusted issuer or `alg: none`, and Entra ID
+style RS256 tokens with the right key, the wrong audience and a forged signature.
 
 ## Design decisions
 
@@ -167,6 +221,8 @@ business rule, the API round trip, the MCP confirm flow and the eval scoring.
   `execute_tools` make sure it cannot do otherwise. The evals show why: a small model ignores instructions often.
 - **Dry run instead of duplicating rules.** The policy check calls the real tool and rolls back, so business rules
   live in one place and cannot drift from a separate validator.
+- **Authorization on the server, roles in one table.** Routes declare the permission they need; `ROLE_PERMISSIONS`
+  in `safeops/auth.py` maps roles to permissions, so the UI hiding a button is a convenience, not the control.
 - **Domain as data.** `Domain` bundles tools, schemas, prompt, seed and record views; the agent, runner, API, MCP
   server, UI and evals are domain-agnostic.
 - **Evals that score behaviour.** Tool calls, arguments and approvals are checked from the trace; final-answer
@@ -182,6 +238,14 @@ business rule, the API round trip, the MCP confirm flow and the eval scoring.
 | `SAFEOPS_GROQ_API_KEY` | – |
 | `SAFEOPS_AGENT_MAX_STEPS` | `10` |
 | `SAFEOPS_AGENT_PREFLIGHT` | `true` |
+| `SAFEOPS_AUTH_JWT_SECRET` | random per process (set 32+ characters to keep tokens valid across restarts) |
+| `SAFEOPS_AUTH_TOKEN_MINUTES` | `30` |
+| `SAFEOPS_AUTH_DEMO_USERS` | `true` |
+| `SAFEOPS_AUTH_DEMO_PASSWORD` | `safeops-demo` |
+| `SAFEOPS_OIDC_ISSUER` | – (e.g. `https://login.microsoftonline.com/<tenant-id>/v2.0`) |
+| `SAFEOPS_OIDC_AUDIENCE` | – (e.g. `api://<app-client-id>`) |
+| `SAFEOPS_OIDC_JWKS_URL` | – (e.g. `https://login.microsoftonline.com/<tenant-id>/discovery/v2.0/keys`) |
+| `SAFEOPS_OIDC_ROLES_CLAIM` | `roles` |
 
 ## License
 

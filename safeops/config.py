@@ -22,5 +22,14 @@ class Settings(BaseSettings):
     database_url: str = f"sqlite:///{(ROOT / 'data' / 'safeops.db').as_posix()}"
     audit_log_path: Path = ROOT / "data" / "audit.jsonl"
 
+    auth_jwt_secret: str | None = None
+    auth_token_minutes: int = 30
+    auth_demo_users: bool = True
+    auth_demo_password: str = "safeops-demo"
+    oidc_issuer: str | None = None
+    oidc_audience: str | None = None
+    oidc_jwks_url: str | None = None
+    oidc_roles_claim: str = "roles"
+
 
 settings = Settings()

@@ -120,6 +120,30 @@ tr.changed td { background: #fff4d6; animation: flash 2.5s ease-out; }
 .audit li.approval_decision b { color: #3d6bf2; }
 .audit li.action_executed b { color: #1f9d55; }
 .audit li.action_blocked b, .audit li.action_failed b { color: #7b4fd6; }
+.audit li.access_denied b, .audit li.approval_denied b, .audit li.login_failed b { color: #a12f2f; }
+
+/* sign-in and identity */
+.login-page { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
+.login { width: 380px; display: flex; flex-direction: column; gap: 12px; padding: 24px; }
+.login h1 { margin: 0; font-size: 22px; }
+.login label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #3a455e; }
+.login input { padding: 8px 10px; border: 1px solid #c9d2e3; border-radius: 6px; font: inherit; }
+.primary { background: #3d6bf2; color: #fff; border-color: #3d6bf2; padding: 8px 12px; }
+.demo-users { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid #edf0f5; padding-top: 12px; }
+.demo-users .hint { margin: 0; }
+.demo-users button { text-align: left; font-size: 13px; }
+.demo-users button span { color: #5a6680; }
+.demo-users button.active { border-color: #3d6bf2; background: #e8eefe; }
+header .who { font-size: 13px; color: #fff; }
+header .who i { font-style: normal; font-size: 11px; background: #3a455e; color: #cdd6ea; padding: 2px 7px; border-radius: 9px; margin-left: 4px; }
+header .signout { background: transparent; color: #cdd6ea; border-color: #3a455e; font-size: 12px; }
+.notice { background: #e9f7ef; color: #17643a; border-radius: 6px; padding: 8px 12px; font-size: 13px; margin-bottom: 10px; }
+.notice.floating { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 5; }
+
+/* approval queue */
+.approvals-view { display: flex; flex-direction: column; gap: 12px; max-width: 820px; margin: 0 auto; }
+.queue-item { margin: 0; }
+.queue-meta { display: flex; align-items: center; gap: 10px; font-size: 12px; color: #5a6680; margin-bottom: 6px; }
 
 @media (max-width: 1000px) {
   .chat-layout { grid-template-columns: 1fr; }

@@ -1,29 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
+import { api, AuthExpired } from "./api";
+import ApprovalsView from "./ApprovalsView";
 import { Bars, Donut, Stat } from "./charts";
+import Login from "./Login";
 import RecordsView from "./RecordsView";
-import type { AgentEvent, AgentResponse, Approval, AuditEntry, DomainInfo, Message, Row } from "./types";
+import type {
+  AgentEvent, AgentResponse, Approval, AuditEntry, DomainInfo, Message, PendingApproval, Row, Session,
+} from "./types";
 
-type View = "chat" | "records";
-
-async function api<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    method: body === undefined ? "GET" : "POST",
-    headers: { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await res.text();
-  let data: unknown = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    if (res.ok) throw new Error(`Unexpected response from ${path}`);
-  }
-  if (!res.ok) {
-    const detail = (data as { detail?: unknown } | null)?.detail;
-    throw new Error(`${res.status} ${typeof detail === "string" ? detail : res.statusText}`);
-  }
-  return data as T;
-}
+type View = "chat" | "approvals" | "records";
 
 function short(value: unknown): string {
   const text = typeof value === "string" ? value : JSON.stringify(value);
@@ -55,6 +40,12 @@ function EventLine({ event }: { event: AgentEvent }) {
 const ChatIcon = () => (
   <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2">
     <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z" />
+  </svg>
+);
+const ApprovalsIcon = () => (
+  <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z" />
+    <path d="M8.5 12l2.5 2.5 4.5-5" />
   </svg>
 );
 const RecordsIcon = () => (
@@ -116,8 +107,10 @@ function Insights({ log, audit, domain }: { log: Message[]; audit: AuditEntry[];
   );
 }
 
-export default function App() {
-  const [view, setView] = useState<View>("chat");
+function Workspace({ session, onSignOut }: { session: Session; onSignOut: (reason?: string) => void }) {
+  const { user, token } = session;
+  const can = (permission: string) => user.permissions.includes(permission);
+  const [view, setView] = useState<View>(can("chat") ? "chat" : "approvals");
   const [domains, setDomains] = useState<DomainInfo[]>([]);
   const [domain, setDomain] = useState("ecommerce");
   const [model, setModel] = useState("");
@@ -126,52 +119,90 @@ export default function App() {
   const [pending, setPending] = useState<Record<string, Approval | null>>({});
   const [records, setRecords] = useState<Record<string, Row[]>>({});
   const [audit, setAudit] = useState<AuditEntry[]>([]);
+  const [queue, setQueue] = useState<PendingApproval[]>([]);
+  const [notice, setNotice] = useState("");
   const [input, setInput] = useState("");
-  const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   const info = domains.find((d) => d.name === domain);
   const log = messages[domain] ?? [];
   const approval = pending[domain] ?? null;
-  const waiting = Object.values(pending).filter(Boolean).length;
+  const myWaiting = Object.values(pending).filter(Boolean).length;
+  const canApprove = can("approve");
+
+  const call = useCallback(<T,>(path: string, body?: unknown) => api<T>(path, { token, body }), [token]);
+  const fail = useCallback((e: unknown) => {
+    if (e instanceof AuthExpired) onSignOut("Your session expired. Please sign in again.");
+    else setError(e instanceof Error ? e.message : String(e));
+  }, [onSignOut]);
 
   const refresh = useCallback(async () => {
-    const [recs, aud] = await Promise.all([
-      api<Record<string, Row[]>>(`/domains/${domain}/records`),
-      api<AuditEntry[]>("/audit?limit=300"),
+    const [recs, aud, items] = await Promise.all([
+      call<Record<string, Row[]>>(`/domains/${domain}/records`),
+      call<AuditEntry[]>("/audit?limit=300"),
+      canApprove ? call<PendingApproval[]>("/approvals") : Promise.resolve([]),
     ]);
     setRecords(recs);
     setAudit(aud.reverse());
-  }, [domain]);
+    setQueue(items);
+  }, [call, domain, canApprove]);
 
   useEffect(() => {
-    api<DomainInfo[]>("/domains").then(setDomains).catch((e) => setError(String(e)));
+    api<DomainInfo[]>("/domains").then(setDomains).catch(fail);
     api<{ model: string }>("/health").then((h) => setModel(h.model)).catch(() => setModel("offline"));
+  }, [fail]);
+
+  useEffect(() => {
+    refresh().catch(fail);
+  }, [refresh, fail]);
+
+  const apply = useCallback((res: AgentResponse) => {
+    const dom = res.domain;
+    setThreads((t) => ({ ...t, [dom]: res.thread_id }));
+    setPending((p) => ({ ...p, [dom]: res.approval }));
+    const added: Message[] = [];
+    if (res.decision) {
+      const d = res.decision;
+      const verb = d.decision === "approved" ? "✔ Approved" : "✖ Rejected";
+      added.push({ kind: "event", event: { type: "tool_result", tool: `${verb} by ${d.reviewer}`,
+                                            result: d.note || d.summary, rejected: d.decision === "rejected" } });
+    }
+    res.events
+      .filter((e) => e.type !== "approval_required")
+      .forEach((event) => added.push({ kind: "event", event }));
+    if (res.reply) added.push({ kind: "agent", text: res.reply });
+    setMessages((m) => ({ ...m, [dom]: [...(m[dom] ?? []), ...added] }));
   }, []);
 
   useEffect(() => {
-    refresh().catch((e) => setError(String(e)));
-  }, [refresh]);
+    const waitingThreads = Object.entries(pending)
+      .filter(([, a]) => a)
+      .map(([dom]) => threads[dom])
+      .filter((t): t is string => !!t);
+    if (!waitingThreads.length && !canApprove) return;
+    const timer = setInterval(async () => {
+      try {
+        for (const threadId of waitingThreads) {
+          const res = await call<AgentResponse>(`/threads/${threadId}`);
+          if (res.status !== "awaiting_approval") apply(res);
+        }
+        await refresh();
+      } catch (e) {
+        fail(e);
+      }
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [pending, threads, canApprove, call, apply, refresh, fail]);
 
-  const apply = (res: AgentResponse) => {
-    setThreads((t) => ({ ...t, [domain]: res.thread_id }));
-    setPending((p) => ({ ...p, [domain]: res.approval }));
-    const added: Message[] = res.events
-      .filter((e) => e.type !== "approval_required")
-      .map((event) => ({ kind: "event", event }));
-    if (res.reply) added.push({ kind: "agent", text: res.reply });
-    setMessages((m) => ({ ...m, [domain]: [...(m[domain] ?? []), ...added] }));
-  };
-
-  const run = async (fn: () => Promise<AgentResponse>) => {
+  const run = async (fn: () => Promise<void>) => {
     setBusy(true);
     setError("");
     try {
-      apply(await fn());
+      await fn();
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      fail(e);
     } finally {
       setBusy(false);
     }
@@ -181,17 +212,14 @@ export default function App() {
     if (!text.trim() || busy || approval) return;
     setInput("");
     setMessages((m) => ({ ...m, [domain]: [...(m[domain] ?? []), { kind: "user", text }] }));
-    run(() => api<AgentResponse>("/chat", { domain, message: text, thread_id: threads[domain] }));
+    run(async () => apply(await call<AgentResponse>("/chat", { domain, message: text, thread_id: threads[domain] })));
   };
 
-  const decide = (approved: boolean) => {
-    const threadId = threads[domain];
-    if (!threadId) return;
-    const text = `${approved ? "✔ Approved" : "✖ Rejected"}: ${approval?.summary}${note ? ` — ${note}` : ""}`;
-    setMessages((m) => ({ ...m, [domain]: [...(m[domain] ?? []), { kind: "user", text }] }));
-    setNote("");
-    run(() => api<AgentResponse>("/approve", { thread_id: threadId, approved, reviewer: "ui-reviewer", note }));
-  };
+  const decide = (item: PendingApproval, approved: boolean, note: string) =>
+    run(async () => {
+      const res = await call<AgentResponse>("/approve", { thread_id: item.thread_id, approved, note });
+      setNotice(`${approved ? "Approved" : "Rejected"}: ${item.summary}${res.reply ? `. Agent: ${res.reply}` : ""}`);
+    });
 
   const newChat = () => {
     setThreads((t) => ({ ...t, [domain]: undefined }));
@@ -199,18 +227,13 @@ export default function App() {
     setPending((p) => ({ ...p, [domain]: null }));
   };
 
-  const resetData = async () => {
-    setBusy(true);
-    try {
-      await api("/reset", {});
+  const resetData = () =>
+    run(async () => {
+      await call("/reset", {});
       newChat();
-      await refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
+
+  const badge = canApprove ? queue.filter((q) => q.can_decide).length : myWaiting;
 
   return (
     <div className="app">
@@ -224,22 +247,36 @@ export default function App() {
           ))}
         </nav>
         <span className={`model ${model === "offline" ? "offline" : ""}`}>{model}</span>
+        <span className="who" title={user.permissions.join(", ")}>
+          {user.username} <i>{user.roles.join(", ")}</i>
+        </span>
+        <button className="signout" onClick={() => onSignOut()}>Sign out</button>
       </header>
 
       <div className="shell">
         <nav className="rail" aria-label="Views">
-          <button className={view === "chat" ? "active" : ""} onClick={() => setView("chat")} title="Agent chat">
-            <ChatIcon />
-            <span>Agent chat</span>
-            {waiting > 0 && view !== "chat" && <i className="badge">{waiting}</i>}
-          </button>
+          {can("chat") && (
+            <button className={view === "chat" ? "active" : ""} onClick={() => setView("chat")} title="Agent chat">
+              <ChatIcon />
+              <span>Agent chat</span>
+              {!canApprove && badge > 0 && view !== "chat" && <i className="badge">{badge}</i>}
+            </button>
+          )}
+          {canApprove && (
+            <button className={view === "approvals" ? "active" : ""} onClick={() => setView("approvals")}
+                    title="Approval queue">
+              <ApprovalsIcon />
+              <span>Approvals</span>
+              {badge > 0 && <i className="badge">{badge}</i>}
+            </button>
+          )}
           <button className={view === "records" ? "active" : ""} onClick={() => setView("records")} title="Live records">
             <RecordsIcon />
             <span>Live records</span>
           </button>
         </nav>
 
-        {view === "chat" ? (
+        {view === "chat" && (
           <main className="chat-layout">
             <section className="chat">
               <p className="hint">
@@ -267,14 +304,13 @@ export default function App() {
 
               {approval && (
                 <div className="approval">
-                  <strong>Approval needed</strong>
+                  <strong>Waiting for a reviewer</strong>
                   <p>{approval.summary}</p>
                   <pre>{JSON.stringify(approval.arguments, null, 2)}</pre>
-                  <input placeholder="Reviewer note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
-                  <div className="actions">
-                    <button className="approve" onClick={() => decide(true)} disabled={busy}>Approve</button>
-                    <button className="reject" onClick={() => decide(false)} disabled={busy}>Reject</button>
-                  </div>
+                  <p className="hint">
+                    Sent to the approval queue. Someone with the reviewer role, other than you, has to approve it
+                    before anything changes. This page updates when they decide.
+                  </p>
                 </div>
               )}
 
@@ -284,7 +320,7 @@ export default function App() {
                 <input
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder={approval ? "Decide on the pending action first" : "Ask the agent…"}
+                  placeholder={approval ? "Waiting for a reviewer's decision" : "Ask the agent…"}
                   disabled={busy || !!approval}
                 />
                 <button type="submit" disabled={busy || !!approval || !input.trim()}>Send</button>
@@ -293,7 +329,17 @@ export default function App() {
             </section>
             <Insights log={log} audit={audit} domain={domain} />
           </main>
-        ) : (
+        )}
+
+        {view === "approvals" && (
+          <main className="records-layout">
+            {error && <div className="error">{error}</div>}
+            {notice && <div className="notice">{notice}</div>}
+            <ApprovalsView items={queue} domains={domains} busy={busy} onDecide={decide} />
+          </main>
+        )}
+
+        {view === "records" && (
           <main className="records-layout">
             {error && <div className="error">{error}</div>}
             <RecordsView
@@ -301,7 +347,7 @@ export default function App() {
               title={info?.title ?? domain}
               records={records}
               audit={audit}
-              onReset={resetData}
+              onReset={can("admin:reset") ? resetData : undefined}
               busy={busy}
             />
           </main>
@@ -309,4 +355,23 @@ export default function App() {
       </div>
     </div>
   );
+}
+
+export default function App() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [reason, setReason] = useState("");
+  const signOut = useCallback((why?: string) => {
+    setSession(null);
+    setReason(why ?? "");
+  }, []);
+
+  if (!session) {
+    return (
+      <>
+        {reason && <div className="notice floating">{reason}</div>}
+        <Login onSignedIn={(s) => { setReason(""); setSession(s); }} />
+      </>
+    );
+  }
+  return <Workspace key={session.user.username} session={session} onSignOut={signOut} />;
 }

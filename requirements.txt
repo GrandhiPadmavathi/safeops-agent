@@ -9,3 +9,5 @@ langchain-ollama>=0.2
 langchain-groq>=0.2
 mcp>=1.2
 python-dotenv>=1.0
+PyJWT[crypto]>=2.8
+python-multipart>=0.0.9
