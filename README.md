@@ -205,7 +205,7 @@ as destructive and return `{"requires_confirmation": true, "summary": ...}` unti
 ## Tests
 
 ```bash
-pytest     # 50 tests, no model needed
+pytest     # 51 tests, no model needed
 ```
 
 The graph is tested with a scripted fake chat model: approve and reject paths for both domains, two risky calls
