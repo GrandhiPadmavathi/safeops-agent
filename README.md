@@ -18,7 +18,7 @@ do, not just what it says.
 - **Two domains, one core**: a domain is just tools + Pydantic schemas + a prompt + seed data. Adding a third is a
   folder, not a rewrite.
 - **Ollama or Groq**: `SAFEOPS_LLM_PROVIDER=ollama` (default, `qwen2.5:3b`, fully local) or `groq`
-  (`llama-3.1-8b-instant`).
+  (`qwen/qwen3.8-27b`).
 - **MCP server**: the same tools can be served to Claude Desktop / Cursor; risky ones only return a preview until
   called again with `confirm=true`.
 
@@ -105,7 +105,7 @@ only (refreshing the page signs you out), and the throttle is per process rather
 | Domain | Read-only tools | Risky tools (need approval) | Rules enforced in code |
 |---|---|---|---|
 | E-commerce | `find_customer`, `get_order`, `track_shipment` | `cancel_order`, `issue_refund`, `update_shipping_address` | cancel/address change only while PLACED; refunds only on DELIVERED, within the refundable balance, max 10,000 |
-| Banking | `find_customer`, `get_account`, `list_transactions`, `get_transaction` | `block_card`, `reverse_transaction`, `freeze_account` | reverse only POSTED charges on ACTIVE accounts, max 5,000; a freeze needs a reason |
+| Banking | `find_customer`, `get_account`, `list_transactions`, `get_transaction` | `block_card`, `reverse_transaction`, `freeze_account` | no card block or reversal on a FROZEN account; reverse only POSTED charges, max 5,000; a freeze needs a reason |
 
 All data is synthetic and reseeded with **Reset demo data**.
 
@@ -236,7 +236,7 @@ style RS256 tokens with the right key, the wrong audience and a forged signature
 |---|---|
 | `SAFEOPS_LLM_PROVIDER` | `ollama` (`groq` also supported) |
 | `SAFEOPS_OLLAMA_MODEL` | `qwen2.5:3b` |
-| `SAFEOPS_GROQ_MODEL` | `llama-3.1-8b-instant` |
+| `SAFEOPS_GROQ_MODEL` | `qwen/qwen3.8-27b` |
 | `SAFEOPS_GROQ_API_KEY` | – |
 | `SAFEOPS_AGENT_MAX_STEPS` | `10` |
 | `SAFEOPS_AGENT_PREFLIGHT` | `true` |

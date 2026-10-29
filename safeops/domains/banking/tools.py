@@ -114,6 +114,8 @@ class BlockCardIn(BaseModel):
 
 def block_card(session: Session, card_id: str, reason: str = "Customer request"):
     card = _card(session, card_id)
+    if card.account.status != "ACTIVE":
+        raise DomainError(f"Account {card.account.number} is {card.account.status}; no changes are allowed.")
     if card.status == "BLOCKED":
         raise DomainError(f"Card {card.card_id} is already blocked ({card.block_reason}).")
     card.status = "BLOCKED"

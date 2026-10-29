@@ -41,6 +41,12 @@ def test_frozen_account_blocks_reversal(db):
     assert "FROZEN" in result_of(BANK, db, "reverse_transaction", transaction_ref="TXN-7007")["error"]
 
 
+def test_frozen_account_blocks_card_changes(db):
+    result_of(BANK, db, "freeze_account", account_number="ACC-3001", reason="Suspected fraud")
+    assert "FROZEN" in result_of(BANK, db, "block_card", card_id="CARD-4242", reason="Lost")["error"]
+    assert "FROZEN" in result_of(BANK, db, "block_card", card_id="CARD-7777", reason="Lost")["error"]
+
+
 def test_freeze_requires_reason(db):
     assert "Invalid arguments" in result_of(BANK, db, "freeze_account", account_number="ACC-3002")["error"]
     ok = result_of(BANK, db, "freeze_account", account_number="ACC-3002", reason="Suspected fraud")

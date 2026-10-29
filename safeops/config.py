@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     llm_provider: Literal["ollama", "groq"] = "ollama"
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen2.5:3b"
-    groq_model: str = "llama-3.1-8b-instant"
+    groq_model: str = "qwen/qwen3.8-27b"
     groq_api_key: str | None = None
 
     agent_max_steps: int = 10
